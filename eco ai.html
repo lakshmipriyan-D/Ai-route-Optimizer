@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Eco Route Optimizer</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css"/>
+
+<style>
+*{box-sizing:border-box;}
+
+body{
+    margin:0;
+    font-family:'Segoe UI',Arial;
+    background:#f1f5f9;
+    color:#1e293b;
+}
+
+header{
+    background:#111827;
+    color:#fff;
+    padding:18px;
+    text-align:center;
+}
+
+.container{
+    max-width:1200px;
+    margin:auto;
+    padding:20px;
+    display:grid;
+    grid-template-columns:380px 1fr;
+    gap:20px;
+}
+
+@media(max-width:900px){
+    .container{grid-template-columns:1fr;}
+}
+
+.card{
+    background:#fff;
+    padding:18px;
+    border-radius:12px;
+    box-shadow:0 4px 12px rgba(0,0,0,0.08);
+    margin-bottom:20px;
+}
+
+h2{
+    font-size:1.1rem;
+    margin-bottom:10px;
+}
+
+label{
+    font-size:13px;
+    font-weight:600;
+    margin-top:10px;
+    display:block;
+}
+
+input,select{
+    width:100%;
+    padding:10px;
+    margin-top:5px;
+    border-radius:8px;
+    border:1px solid #d1d5db;
+    font-size:14px;
+}
+
+button{
+    width:100%;
+    padding:12px;
+    border:none;
+    border-radius:8px;
+    font-weight:bold;
+    cursor:pointer;
+}
+
+.addBtn{background:#374151;color:#fff;}
+.runBtn{background:#22c55e;color:#fff;}
+.resetBtn{background:#9ca3af;color:#fff;}
+
+.btn-group{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    margin-top:15px;
+}
+
+.stopCard{
+    border:1px solid #e5e7eb;
+    padding:15px;
+    border-radius:10px;
+    margin-bottom:12px;
+    position:relative;
+    background:#fafafa;
+}
+
+.deleteBtn{
+    position:absolute;
+    top:8px;
+    right:8px;
+    width:26px;
+    height:26px;
+    border-radius:50%;
+    background:#ef4444;
+    color:#fff;
+    border:none;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:14px;
+    cursor:pointer;
+}
+
+#map{
+    height:650px;
+    width:100%;
+    border-radius:12px;
+    border:2px solid #fff;
+}
+
+#report{
+    margin-top:15px;
+    padding:15px;
+    background:#16a34a;
+    color:white;
+    border-radius:8px;
+    display:none;
+}
+
+.loading{
+    display:none;
+    text-align:center;
+    font-weight:bold;
+    color:#16a34a;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+<h1>🌿 AI Eco Route Optimizer</h1>
+<p>Professional Sustainable Logistics Tool</p>
+</header>
+
+<div class="container">
+
+<div>
+<div class="card">
+<h2>Vehicle Configuration</h2>
+
+<select id="vehicle">
+<option value="50">Bike 50 km/L</option>
+<option value="30">Auto 30 km/L</option>
+<option value="15">Van 15 km/L</option>
+<option value="12">Pickup 12 km/L</option>
+<option value="8">Truck 8 km/L</option>
+<option value="4">Heavy 4 km/L</option>
+</select>
+
+<input id="hubLat" placeholder="Hub Latitude">
+<input id="hubLon" placeholder="Hub Longitude">
+</div>
+
+<div class="card">
+<h2>Route Stops</h2>
+
+<div id="stopList"></div>
+
+<div class="btn-group">
+<button class="addBtn" onclick="addStop()">+ Add Stop</button>
+<button class="runBtn" onclick="optimizeRoute()">Optimize Route</button>
+<button class="resetBtn" onclick="location.reload()">Reset</button>
+</div>
+
+<div id="loading" class="loading">🔄 Calculating...</div>
+</div>
+
+<div id="report"></div>
+
+</div>
+
+<div id="map"></div>
+
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+
+<script>
+var map=L.map('map').setView([20,0],2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+var routingControl;
+var stopIndex=0;
+
+const emissionFactor={50:2.31,30:2.31,15:2.68,12:2.68,8:2.68,4:2.68};
+
+function addStop(){
+    stopIndex++;
+    let div=document.createElement("div");
+    div.className="stopCard";
+    div.id="stop"+stopIndex;
+
+    div.innerHTML=`
+    <button class="deleteBtn" onclick="removeStop('${div.id}')">✕</button>
+    <input class="lat" placeholder="Latitude">
+    <input class="lon" placeholder="Longitude">
+    <input class="weight" value="10">
+    `;
+
+    document.getElementById("stopList").appendChild(div);
+}
+
+function removeStop(id){
+    document.getElementById(id).remove();
+}
+
+// 🔥 HYBRID TRAFFIC MODEL
+function getTraffic(){
+    let h=new Date().getHours();
+    if(h>=8&&h<=11)return 1.5;
+    if(h>=17&&h<=21)return 1.6;
+    if(h>=22||h<=5)return 0.8;
+    return 1.1;
+}
+
+function getCityTraffic(lat,lon){
+    if(lat>10 && lat<30 && lon>70 && lon<90){
+        return 1.4;
+    }
+    return 1.1;
+}
+
+function getSmartTraffic(dist){
+    if(dist<5)return 1.5;
+    if(dist<20)return 1.2;
+    return 0.9;
+}
+
+// fallback distance
+function approxDistance(a,b){
+    let dx=a.lat-b.lat;
+    let dy=a.lon-b.lon;
+    return Math.sqrt(dx*dx+dy*dy)*111;
+}
+
+async function getRoad(a,b){
+    let dist=approxDistance(a,b);
+
+    let traffic =
+        getTraffic() *
+        getCityTraffic(a.lat,a.lon) *
+        getSmartTraffic(dist);
+
+    return {dist:dist,traffic:traffic};
+}
+
+async function optimizeRoute(){
+
+    let hLat=document.getElementById("hubLat").value;
+    let hLon=document.getElementById("hubLon").value;
+
+    if(!hLat||!hLon) return alert("Enter hub");
+
+    let mileage=parseFloat(document.getElementById("vehicle").value);
+
+    let lats=document.getElementsByClassName("lat");
+    let lons=document.getElementsByClassName("lon");
+
+    let stops=[];
+    for(let i=0;i<lats.length;i++){
+        if(lats[i].value && lons[i].value){
+            stops.push({
+                lat:parseFloat(lats[i].value),
+                lon:parseFloat(lons[i].value),
+                id:i+1
+            });
+        }
+    }
+
+    if(stops.length==0) return alert("Add stops");
+
+    document.getElementById("loading").style.display="block";
+
+    let current={lat:parseFloat(hLat),lon:parseFloat(hLon)};
+    let route=[L.latLng(current.lat,current.lon)];
+    let seq=["Hub"];
+    let totalDist=0;
+    let totalTraffic=1;
+
+    while(stops.length){
+
+        let results=await Promise.all(
+            stops.map(s=>getRoad(current,s))
+        );
+
+        let best=-1,min=Infinity,data;
+
+        for(let i=0;i<results.length;i++){
+            let r=results[i];
+            if(!r)continue;
+
+            if(r.dist<min){
+                min=r.dist;
+                best=i;
+                data=r;
+            }
+        }
+
+        if(best===-1)break;
+
+        totalDist+=data.dist;
+        totalTraffic*=data.traffic;
+
+        current=stops[best];
+
+        route.push(L.latLng(current.lat,current.lon));
+        seq.push("Stop "+current.id);
+
+        stops.splice(best,1);
+    }
+
+    let co2=(totalDist/mileage)*emissionFactor[mileage]*totalTraffic;
+    let baseline=co2*1.35;
+    let saved=baseline-co2;
+    let eff=baseline>0?((saved/baseline)*100).toFixed(1):0;
+
+    document.getElementById("report").style.display="block";
+    document.getElementById("report").innerHTML=`
+    <h3>Eco Impact Report</h3>
+    ${seq.join(" ➔ ")}<br>
+    Distance: ${totalDist.toFixed(2)} km<br>
+    CO₂: ${co2.toFixed(2)} kg<br>
+    Saved: ${saved.toFixed(2)} kg<br>
+    Efficiency: ${eff}%
+    `;
+
+    if(routingControl) map.removeControl(routingControl);
+
+    routingControl=L.Routing.control({
+        waypoints:route,
+        router:L.Routing.osrmv1({serviceUrl:"https://router.project-osrm.org/route/v1"}),
+        lineOptions:{styles:[{color:'#16a34a',weight:6}]},
+        createMarker:(i,wp)=>{
+            return L.marker(wp.latLng).bindPopup(i==0?"Start":"Stop "+i);
+        },
+        addWaypoints:false
+    }).addTo(map);
+
+    map.fitBounds(L.latLngBounds(route));
+
+    document.getElementById("loading").style.display="none";
+}
+
+window.onload=addStop;
+</script>
+
+</body>
+</html>
